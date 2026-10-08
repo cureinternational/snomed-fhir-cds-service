@@ -43,10 +43,10 @@ public class MedicationAllergyRuleLoaderService {
             csvReader.setDelimiter(TAB_DELIMITER);
             String[] expectedHeadings = new String[]{
                     "UUID",
-                    "Medication1",
-                    "Medication1 SNOMED Code",
-                    "Medication2",
-                    "Medication2 SNOMED Code",
+                    "Medication",
+                    "Medication SNOMED Code",
+                    "Allergen",
+                    "Allergen SNOMED Code",
                     "Card Indicator",
                     "Card Summary",
                     "Card Detail",
@@ -58,10 +58,10 @@ public class MedicationAllergyRuleLoaderService {
             int rowNumber = 1;
             while (csvReader.line()) {
                 String uuid = csvReader.cell(expectedHeadings[0]);
-                String allergenLabel = csvReader.cell(expectedHeadings[1]);
-                String allergenSnomedCode = csvReader.cell(expectedHeadings[2]);
-                String medicationLabel = csvReader.cell(expectedHeadings[3]);
-                String medicationSnomedCode = csvReader.cell(expectedHeadings[4]);
+                String medicationLabel = csvReader.cell(expectedHeadings[1]);
+                String medicationSnomedCode = csvReader.cell(expectedHeadings[2]);
+                String allergenLabel = csvReader.cell(expectedHeadings[3]);
+                String allergenSnomedCode = csvReader.cell(expectedHeadings[4]);
                 String cardIndicator = csvReader.cell(expectedHeadings[5]);
                 String cardSummary = csvReader.cell(expectedHeadings[6]);
                 String cardDetail = csvReader.cell(expectedHeadings[7]);
