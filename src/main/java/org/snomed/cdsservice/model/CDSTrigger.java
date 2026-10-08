@@ -71,10 +71,6 @@ public abstract class CDSTrigger {
 		}).collect(Collectors.toList());
 	}
 
-	public String toHumanReadable(Collection<Coding> codings) {
-		return toHumanReadable(codings, null);
-	}
-
 	public String toHumanReadable(Collection<Coding> codings, String fallback) {
 		Collection<String> codingsDisplay = codings.stream().map(Coding::getDisplay).filter(Objects::nonNull).collect(Collectors.toSet());
 		if (codingsDisplay.isEmpty()) {

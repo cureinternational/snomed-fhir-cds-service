@@ -36,7 +36,7 @@ public class MedicationAllergyCDSTrigger extends CDSTrigger {
         }
 
         text = text.replace("{{RuleMedication}}", getMedicationLabel());
-        text = text.replace("{{ActualMedication}}", toHumanReadable(medicationIntersection));
+        text = text.replace("{{ActualMedication}}", toHumanReadable(medicationIntersection, getMedicationLabel()));
         text = text.replace("{{RuleAllergen}}", getConditionLabel());
         text = text.replace("{{ActualAllergen}}", toHumanReadable(allergenIntersection, getConditionLabel()));
 

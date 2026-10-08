@@ -202,6 +202,41 @@ class MedicationOrderSelectCDSServiceTest {
 	}
 
 	@Test
+	public void shouldFallBackToRuleMedicationName_WhenPrescribedMedicationCodingHasNoDisplay() throws IOException {
+		CDSTrigger allergyTrigger = new MedicationAllergyCDSTrigger(
+				"Penicillin-containing product",
+				Collections.singleton(new Coding("http://snomed.info/sct", "890458001", null)),
+				"Penicillin-containing product",
+				Collections.singleton(new Coding("http://snomed.info/sct", "890458001", null)),
+				new CDSCard(
+						"a99169a9-1092-4597-920a-03ccd7a8716c",
+						"Contraindication of medication for patient allergy: {{ActualMedication}} with allergen {{ActualAllergen}}.",
+						"The use of {{RuleMedication}} is contraindicated when the patient has an allergy to {{RuleAllergen}}.",
+						CDSIndicator.critical,
+						new CDSSource("CPIC"),
+						null,
+						null,
+						CONTRAINDICATION_ALERT_TYPE));
+		service.setMedicationAllergyTriggers(List.of(allergyTrigger));
+		String medicationBundleWithoutDisplay = StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/MedicationRequestBundleWithPenicillin.json"), StandardCharsets.UTF_8)
+				.replace("\"display\": \"Penicillin-containing product\"", "\"display\": null");
+
+		CDSRequest cdsRequest = new CDSRequest();
+		cdsRequest.setPrefetchStrings(Map.of(
+				"patient", StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/PatientResource.json"), StandardCharsets.UTF_8),
+				"conditions", "{\"resourceType\":\"Bundle\"}",
+				"draftMedicationRequests", medicationBundleWithoutDisplay,
+				"allergies", StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/AllergyIntoleranceBundle.json"), StandardCharsets.UTF_8)
+		));
+
+		List<CDSCard> cards = service.call(cdsRequest);
+		assertEquals(1, cards.size());
+
+		CDSCard cdsCard = cards.get(0);
+		assertEquals("Contraindication of medication for patient allergy: \"Penicillin-containing product\" with allergen \"Penicillin-containing product\".", cdsCard.getSummary());
+	}
+
+	@Test
 	public void shouldNotReturnAlert_WhenPatientAllergyIsNotCoveredByRules() throws IOException {
 		CDSTrigger allergyTrigger = new MedicationAllergyCDSTrigger(
 				"Penicillin-containing product",
