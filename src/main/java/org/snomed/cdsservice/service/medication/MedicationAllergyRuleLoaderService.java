@@ -37,8 +37,8 @@ public class MedicationAllergyRuleLoaderService {
 
     public List<CDSTrigger> loadTriggers() throws ServiceException {
         List<CDSTrigger> triggers = new ArrayList<>();
-        try (FileInputStream file = new FileInputStream(tsvPath)) {
-            CSVReader csvReader = new CSVReader(file);
+        try (FileInputStream file = new FileInputStream(tsvPath);
+             CSVReader csvReader = new CSVReader(file)) {
             char TAB_DELIMITER = '\t';
             csvReader.setDelimiter(TAB_DELIMITER);
             String[] expectedHeadings = new String[]{
@@ -74,11 +74,11 @@ public class MedicationAllergyRuleLoaderService {
                 }
 
                 if (allergenSnomedCode.contains("|") && !allergenSnomedCode.startsWith("ECL=")) {
-                    allergenSnomedCode = allergenSnomedCode.substring(allergenSnomedCode.indexOf("|")).trim();
+                    allergenSnomedCode = allergenSnomedCode.substring(0, allergenSnomedCode.indexOf("|")).trim();
                 }
 
                 if (medicationSnomedCode.contains("|") && !medicationSnomedCode.startsWith("ECL=")) {
-                    medicationSnomedCode = medicationSnomedCode.substring(medicationSnomedCode.indexOf("|")).trim();
+                    medicationSnomedCode = medicationSnomedCode.substring(0, medicationSnomedCode.indexOf("|")).trim();
                 }
 
                 CDSCard cdsCard = new CDSCard(uuid, cardSummary, cardDetail, CDSIndicator.valueOf(cardIndicator), new CDSSource(source, sourceLink), null, null, CONTRAINDICATION_ALERT_TYPE);
