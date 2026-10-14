@@ -2,7 +2,7 @@ name: Build and Publish
 on:
   push:
     branches:
-      - develop
+      - snomed-develop
   workflow_dispatch:
 
 jobs:
