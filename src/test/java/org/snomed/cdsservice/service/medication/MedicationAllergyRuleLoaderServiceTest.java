@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 import org.snomed.cdsservice.model.CDSTrigger;
 import org.snomed.cdsservice.service.tsclient.FHIRTerminologyServerClient;
+import org.snomed.cdsservice.util.SnomedValueSetUtil;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
@@ -37,7 +38,9 @@ class MedicationAllergyRuleLoaderServiceTest {
         List<CDSTrigger> triggers = load("CDS_Medication-Allergy_Cards.tsv");
 
         assertEquals(1, triggers.size());
-        verify(tsClient, Mockito.times(2)).expandValueSet(NSAID_VALUE_SET);
+        verify(tsClient).expandValueSet(NSAID_VALUE_SET);
+        verify(tsClient).expandValueSet(SnomedValueSetUtil.getSNOMEDValueSetURI(
+                "ECL=<< 763158003 |Medicinal product| : 127489000 |Has active ingredient| = << 372665008"));
     }
 
     @Test
