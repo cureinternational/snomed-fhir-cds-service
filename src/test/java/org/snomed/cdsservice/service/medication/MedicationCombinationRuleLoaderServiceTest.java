@@ -36,8 +36,8 @@ class MedicationCombinationRuleLoaderServiceTest {
 		ReflectionTestUtils.setField(service, "tsvPath", "src/test/resources/test-rules/CDS_Medication-Medication_Cards.tsv");
 		
 		// Mock the terminology server responses for each medication
-		when(mockTsClient.expandValueSet(eq("http://snomed.info/sct?fhir_vs=isa/33664007"))).thenReturn(List.of(
-			new Coding("http://snomed.info/sct", "33664007", "Acetazolamide")
+		when(mockTsClient.expandValueSet(eq("http://snomed.info/sct?fhir_vs=isa/69236009"))).thenReturn(List.of(
+			new Coding("http://snomed.info/sct", "69236009", "Amiodarone")
 		));
 		
 		when(mockTsClient.expandValueSet(eq("http://snomed.info/sct?fhir_vs=isa/96119002"))).thenReturn(List.of(
@@ -56,16 +56,16 @@ class MedicationCombinationRuleLoaderServiceTest {
 
 		// Verify first trigger
 		MedicationInterationCDSTrigger firstTrigger = (MedicationInterationCDSTrigger) triggers.get(0);
-		assertEquals("Acetazolamide", firstTrigger.getMedicationLabel());
+		assertEquals("Amiodarone", firstTrigger.getMedicationLabel());
 		assertEquals("Albendazole", firstTrigger.getMedication2Label());
 		
 		CDSCard card = firstTrigger.getCard();
-		assertEquals("7db8e2f9-0baa-477e-8682-24bdffbd3fda", card.getUuid());
-		assertEquals(CDSIndicator.warning, card.getIndicator());
+		assertEquals("bec64968-0996-4497-b337-aea48cf5a0f2", card.getUuid());
+		assertEquals(CDSIndicator.info, card.getIndicator());
 		assertEquals("Contraindication of drug-drug interaction: {{ActualMedication1}} with {{ActualMedication2}}.", card.getSummary());
-		assertEquals("The use of {{RuleMedication1}} is contraindicated with {{RuleMedication2}}. The metabolism of Albendazole can be decreased when combined with Acetazolamide.", card.getDetail());
+		assertEquals("The use of {{RuleMedication1}} is contraindicated with {{RuleMedication2}}. The metabolism of Albendazole can be decreased when combined with Amiodarone.", card.getDetail());
 		assertEquals("Drug Bank", card.getSource().getLabel());
-		assertEquals("https://go.drugbank.com/drugs/DB00819#drug-interactions", card.getSource().getUrl());
+		assertEquals("https://go.drugbank.com/drugs/DB01118#drug-interactions", card.getSource().getUrl());
 	}
 
 	@Test
@@ -104,8 +104,8 @@ class MedicationCombinationRuleLoaderServiceTest {
 		// Verify coding values
 		Coding medication1Coding = medication1Codings.iterator().next();
 		assertEquals("http://snomed.info/sct", medication1Coding.getSystem());
-		assertEquals("33664007", medication1Coding.getCode());
-		assertEquals("Acetazolamide", medication1Coding.getDisplay());
+		assertEquals("69236009", medication1Coding.getCode());
+		assertEquals("Amiodarone", medication1Coding.getDisplay());
 
 		Coding medication2Coding = medication2Codings.iterator().next();
 		assertEquals("http://snomed.info/sct", medication2Coding.getSystem());
