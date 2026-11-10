@@ -129,6 +129,50 @@ class MedicationOrderSelectCDSServiceTest {
 	}
 
 	@Test
+	public void shouldSkipDosageValidationForMedicationRequestsMarkedToSkipDosageCheck() throws IOException {
+		CDSRequest cdsRequest = new CDSRequest();
+		cdsRequest.setPrefetchStrings(Map.of(
+				"patient", StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/PatientResource.json"), StandardCharsets.UTF_8),
+				"conditions", StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/ConditionBundle.json"), StandardCharsets.UTF_8),
+				"draftMedicationRequests", """
+						{
+						  "resourceType": "Bundle",
+						  "type": "collection",
+						  "entry": [
+						    {
+						      "resource": {
+						        "resourceType": "MedicationRequest",
+						        "status": "active",
+						        "intent": "order",
+						        "extension": [
+						          {
+						            "url": "https://bahmni.org/fhir/StructureDefinition/skip-dosage-check",
+						            "valueBoolean": true
+						          }
+						        ],
+						        "medicationCodeableConcept": {
+						          "coding": [
+						            {
+						              "system": "http://snomed.info/sct",
+						              "code": "1145419005",
+						              "display": "Atorvastatin (as atorvastatin calcium) 10 mg oral tablet"
+						            }
+						          ]
+						        }
+						      }
+						    }
+						  ]
+						}
+						"""
+		));
+
+		List<CDSCard> cards = service.call(cdsRequest);
+
+		assertEquals(1, cards.size());
+		assertEquals(CONTRAINDICATION_ALERT_TYPE, cards.get(0).getAlertType());
+	}
+
+	@Test
 	public void shouldReturnAlert_WhenPrescribedDrugIsContraindicatedForPatientAllergy() throws IOException {
 		CDSTrigger allergyTrigger = new MedicationAllergyCDSTrigger(
 				"Penicillin-containing product",
