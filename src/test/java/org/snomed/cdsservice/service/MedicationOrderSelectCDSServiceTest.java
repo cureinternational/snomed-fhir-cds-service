@@ -1,7 +1,9 @@
 package org.snomed.cdsservice.service;
 
 import ca.uhn.fhir.context.FhirContext;
+import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Coding;
+import org.hl7.fhir.r4.model.MedicationRequest;
 import org.hl7.fhir.r4.model.Parameters;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -126,6 +128,33 @@ class MedicationOrderSelectCDSServiceTest {
 		assertEquals("1145419005", cdsCard.getReferenceMedications().get(0).getCoding().get(0).getCode());
 		assertEquals("197321007", cdsCard.getReferenceConditions().get(0).getCoding().get(0).getCode());
 		assertEquals(CONTRAINDICATION_ALERT_TYPE, cdsCard.getAlertType());
+	}
+
+	@Test
+	public void shouldKeepDistinctMedicationReferencesForFormulationsSharingTheSameSnomedCode() throws IOException {
+		var parser = FhirContext.forR4().newJsonParser();
+		Bundle medications = parser.parseResource(Bundle.class, StreamUtils.copyToString(
+				getClass().getResourceAsStream("/medication-order-select/MedicationRequestBundle.json"), StandardCharsets.UTF_8));
+		MedicationRequest tablet = (MedicationRequest) medications.getEntryFirstRep().getResource();
+		MedicationRequest suspension = tablet.copy();
+		suspension.setId("suspension-order");
+		suspension.getMedicationCodeableConcept().getCoding().forEach(coding -> {
+			coding.setDisplay("Atorvastatin suspension");
+			if (!SNOMEDCT_SYSTEM.equals(coding.getSystem())) coding.setCode("suspension-drug");
+		});
+		medications.addEntry().setResource(suspension);
+		CDSRequest request = new CDSRequest();
+		request.setPrefetchStrings(Map.of(
+				"patient", StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/PatientResource.json"), StandardCharsets.UTF_8),
+				"conditions", StreamUtils.copyToString(getClass().getResourceAsStream("/medication-order-select/ConditionBundle.json"), StandardCharsets.UTF_8),
+				"draftMedicationRequests", parser.encodeResourceToString(medications)
+		));
+
+		CDSCard card = service.call(request).stream().filter(result -> CONTRAINDICATION_ALERT_TYPE.equals(result.getAlertType())).findFirst().orElseThrow();
+		assertEquals(List.of(tablet.getMedicationCodeableConcept().getCoding().get(1).getCode(), "suspension-drug"),
+				card.getReferenceMedications().stream().map(reference -> reference.getCoding().get(1).getCode()).toList());
+		assertEquals(List.of(tablet.getMedicationCodeableConcept().getCodingFirstRep().getDisplay(), "Atorvastatin suspension"),
+				card.getReferenceMedications().stream().map(reference -> reference.getCoding().get(0).getDisplay()).toList());
 	}
 
 	@Test

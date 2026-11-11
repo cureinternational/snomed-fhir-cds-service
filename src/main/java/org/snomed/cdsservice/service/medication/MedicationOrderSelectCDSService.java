@@ -138,26 +138,22 @@ public class MedicationOrderSelectCDSService extends CDSService {
 	}
 
 	private void addCodesFromOtherCodingSystemsForDraftMedications(List<CDSReference> referenceMedications, List<MedicationRequest> draftMedicationOrders) {
-		referenceMedications.forEach(referenceMedication -> {
-			CDSCoding cdsCoding = referenceMedication.getCoding().get(0);
-			Optional<MedicationRequest> optionalMedicationRequest = draftMedicationOrders.stream().filter(medicationRequest -> {
-				List<Coding> codingList = medicationRequest.getMedicationCodeableConcept().getCoding();
-				Optional<Coding> optionalCoding = codingList.stream().filter(coding -> Objects.equals(coding.getCode(), cdsCoding.getCode()) && Objects.equals(coding.getSystem(), cdsCoding.getSystem())).findFirst();
-				return optionalCoding.isPresent();
-			}).findFirst();
-			optionalMedicationRequest.ifPresent(getCDSReferenceMedicationReqquestConsumer(referenceMedication));
-		});
-
+		List<CDSReference> references = draftMedicationOrders.stream()
+				.filter(medicationRequest -> referenceMedications.stream().anyMatch(referenceMedication -> {
+					CDSCoding cdsCoding = referenceMedication.getCoding().get(0);
+					return medicationRequest.getMedicationCodeableConcept().getCoding().stream()
+							.anyMatch(coding -> Objects.equals(coding.getCode(), cdsCoding.getCode()) && Objects.equals(coding.getSystem(), cdsCoding.getSystem()));
+				}))
+				.map(medicationRequest -> new CDSReference(medicationRequest.getMedicationCodeableConcept().getCoding().stream()
+						.map(getCodingCDSCodingFunction()).collect(Collectors.toList())))
+				.collect(Collectors.toList());
+		referenceMedications.clear();
+		referenceMedications.addAll(references);
 	}
 
 	@NotNull
 	private Consumer<Condition> getCDSReferenceConditionConsumer(CDSReference reference) {
 		return condition -> reference.setCoding(condition.getCode().getCoding().stream().map(getCodingCDSCodingFunction()).collect(Collectors.toList()));
-	}
-
-	@NotNull
-	private Consumer<MedicationRequest> getCDSReferenceMedicationReqquestConsumer(CDSReference reference) {
-		return medicationRequest -> reference.setCoding(medicationRequest.getMedicationCodeableConcept().getCoding().stream().map(getCodingCDSCodingFunction()).collect(Collectors.toList()));
 	}
 
 	@NotNull
