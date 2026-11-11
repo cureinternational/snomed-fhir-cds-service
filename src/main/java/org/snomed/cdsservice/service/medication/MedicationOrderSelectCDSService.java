@@ -27,6 +27,8 @@ import java.util.stream.Stream;
 @Service
 public class MedicationOrderSelectCDSService extends CDSService {
 
+	private static final String SKIP_DOSAGE_CHECK_EXTENSION_URL = "https://bahmni.org/fhir/StructureDefinition/skip-dosage-check";
+
 	private final Logger logger = LoggerFactory.getLogger(getClass());
 
 	@Autowired
@@ -107,9 +109,19 @@ public class MedicationOrderSelectCDSService extends CDSService {
 			}
 		});
 
-		cards.addAll(definedDailyDoseService.checkMedications(medicationRequests));
+		List<MedicationRequest> dosageCheckMedicationRequests = medicationRequests.stream()
+				.filter(medicationRequest -> !shouldSkipDosageCheck(medicationRequest))
+				.collect(Collectors.toList());
+		cards.addAll(definedDailyDoseService.checkMedications(dosageCheckMedicationRequests));
 
 		return cards;
+	}
+
+	private boolean shouldSkipDosageCheck(MedicationRequest medicationRequest) {
+		return medicationRequest.getExtension().stream()
+				.anyMatch(extension -> SKIP_DOSAGE_CHECK_EXTENSION_URL.equals(extension.getUrl())
+						&& extension.getValue() instanceof BooleanType
+						&& ((BooleanType) extension.getValue()).booleanValue());
 	}
 
 	private void addCodesFromOtherCodingSystemsForConditions(List<CDSReference> referenceConditions, List<Condition> activeDiagnoses) {
