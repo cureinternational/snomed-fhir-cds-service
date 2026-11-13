@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -101,13 +102,32 @@ public class MedicationOrderSelectCDSService extends CDSService {
 			}
 		});
 
-		drugDrugInteractionTriggers.forEach(trigger -> {
-			CDSCard card = trigger.createRelevantCard(draftMedicationOrderCodings, draftMedicationOrderCodings);
-			if (card != null) {
-				addCodesFromOtherCodingSystemsForDraftMedications(card.getReferenceMedications(), medicationRequests);
-				cards.add(card);
+		for (CDSTrigger trigger : drugDrugInteractionTriggers) {
+			Map<String, MedicationRequest> firstSide = getMatchingMedications(trigger, trigger.getMedicationCodings(), medicationRequests);
+			Map<String, MedicationRequest> secondSide = getMatchingMedications(trigger, trigger.getMedication2Codings(), medicationRequests);
+			Set<String> pairIds = new HashSet<>();
+			for (Map.Entry<String, MedicationRequest> first : firstSide.entrySet()) {
+				for (Map.Entry<String, MedicationRequest> second : secondSide.entrySet()) {
+					if (first.getKey().equals(second.getKey())) {
+						continue;
+					}
+					String pairKey = trigger.getCard().getUuid() + "\n"
+							+ Stream.of(first.getKey(), second.getKey()).sorted().collect(Collectors.joining("\n"));
+					String pairId = UUID.nameUUIDFromBytes(pairKey.getBytes(StandardCharsets.UTF_8)).toString();
+					if (!pairIds.add(pairId)) {
+						continue;
+					}
+					CDSCard card = trigger.createRelevantCard(
+							getCodings(Stream.of(second.getValue().getMedicationCodeableConcept())),
+							getCodings(Stream.of(first.getValue().getMedicationCodeableConcept())));
+					if (card != null) {
+						addCodesFromOtherCodingSystemsForDraftMedications(card.getReferenceMedications(), List.of(first.getValue(), second.getValue()));
+						cards.add(new CDSCard(pairId, card.getSummary(), card.getDetail(), card.getIndicator(),
+								card.getSource(), card.getReferenceMedications(), card.getReferenceConditions(), card.getAlertType()));
+					}
+				}
 			}
-		});
+		}
 
 		List<MedicationRequest> dosageCheckMedicationRequests = medicationRequests.stream()
 				.filter(medicationRequest -> !shouldSkipDosageCheck(medicationRequest))
@@ -115,6 +135,26 @@ public class MedicationOrderSelectCDSService extends CDSService {
 		cards.addAll(definedDailyDoseService.checkMedications(dosageCheckMedicationRequests));
 
 		return cards;
+	}
+
+	private Map<String, MedicationRequest> getMatchingMedications(CDSTrigger trigger, Collection<Coding> ruleCodings, List<MedicationRequest> medicationRequests) {
+		// ponytail: formulation-level cards; order-level cards need an order-aware client.
+		return medicationRequests.stream()
+				.filter(request -> !trigger.getIntersection(request.getMedicationCodeableConcept().getCoding(), ruleCodings).isEmpty())
+				.collect(Collectors.toMap(this::getMedicationIdentity, Function.identity(), (first, second) -> first, LinkedHashMap::new));
+	}
+
+	private String getMedicationIdentity(MedicationRequest request) {
+		List<Coding> codings = request.getMedicationCodeableConcept().getCoding();
+		String identity = codings.stream()
+				.filter(coding -> "https://fhir.openmrs.org".equals(coding.getSystem()) && coding.hasCode())
+				.map(coding -> coding.getSystem() + "|" + coding.getCode())
+				.sorted()
+				.findFirst()
+				.orElseGet(() -> codings.stream().filter(Coding::hasCode)
+						.map(coding -> coding.getSystem() + "|" + coding.getCode())
+						.distinct().sorted().collect(Collectors.joining("\n")));
+		return UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
 	}
 
 	private boolean shouldSkipDosageCheck(MedicationRequest medicationRequest) {

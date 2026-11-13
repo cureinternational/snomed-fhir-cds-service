@@ -1,7 +1,9 @@
 package org.snomed.cdsservice.service;
 
 import ca.uhn.fhir.context.FhirContext;
+import org.hl7.fhir.r4.model.BooleanType;
 import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.CodeableConcept;
 import org.hl7.fhir.r4.model.Coding;
 import org.hl7.fhir.r4.model.MedicationRequest;
 import org.hl7.fhir.r4.model.Parameters;
@@ -15,6 +17,7 @@ import org.snomed.cdsservice.model.CDSSource;
 import org.snomed.cdsservice.model.CDSTrigger;
 import org.snomed.cdsservice.model.MedicationAllergyCDSTrigger;
 import org.snomed.cdsservice.model.MedicationConditionCDSTrigger;
+import org.snomed.cdsservice.model.MedicationInterationCDSTrigger;
 import org.snomed.cdsservice.rest.pojo.CDSRequest;
 import org.snomed.cdsservice.service.medication.MedicationAllergyRuleLoaderService;
 import org.snomed.cdsservice.service.medication.MedicationCombinationRuleLoaderService;
@@ -43,6 +46,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
@@ -73,6 +77,8 @@ class MedicationOrderSelectCDSServiceTest {
 
     @BeforeEach
     void setMockOutput() throws ServiceException {
+		when(medicationRuleLoaderService.loadTriggers()).thenReturn(Collections.emptyList());
+		service.init();
         CDSTrigger trigger = new MedicationConditionCDSTrigger(
                 "Atorvastatin",
                 Collections.singleton(new Coding("http://snomed.info/sct", "1145419005", null)),
@@ -155,6 +161,108 @@ class MedicationOrderSelectCDSServiceTest {
 				card.getReferenceMedications().stream().map(reference -> reference.getCoding().get(1).getCode()).toList());
 		assertEquals(List.of(tablet.getMedicationCodeableConcept().getCodingFirstRep().getDisplay(), "Atorvastatin suspension"),
 				card.getReferenceMedications().stream().map(reference -> reference.getCoding().get(0).getDisplay()).toList());
+	}
+
+	@Test
+	void shouldReturnSeparateInteractionCardsForFormulationsSharingOrDifferingInSnomedCode() throws Exception {
+		configureDrugInteractions(drugInteraction("interaction-rule", List.of("69236009"), List.of("96119002", "1365685009")));
+		MedicationRequest amiodarone = interactionMedication("amiodarone", "69236009", "Amiodarone ampoule");
+		MedicationRequest tablet = interactionMedication("tablet", "96119002", "Albendazole tablet");
+		MedicationRequest suspension = interactionMedication("suspension", "96119002", "Albendazole suspension");
+		MedicationRequest otherForm = interactionMedication("other-form", "1365685009", "Albendazole other formulation");
+
+		List<CDSCard> cards = evaluateInteractions(amiodarone, tablet, suspension, otherForm);
+
+		assertEquals(3, cards.size());
+		assertEquals(3, cards.stream().map(CDSCard::getUuid).distinct().count());
+		for (int i = 0; i < cards.size(); i++) {
+			CDSCard card = cards.get(i);
+			MedicationRequest partner = List.of(tablet, suspension, otherForm).get(i);
+			assertEquals(List.of("amiodarone", List.of("tablet", "suspension", "other-form").get(i)), localDrugCodes(card));
+			assertEquals(2, card.getReferenceMedications().size());
+			assertEquals("Amiodarone ampoule with " + partner.getMedicationCodeableConcept().getCodingFirstRep().getDisplay() + ".",
+					card.getSummary().replace("\"", ""));
+			assertEquals("Party A with Party B.", card.getDetail());
+			assertEquals(CDSIndicator.critical, card.getIndicator());
+			assertEquals("Drug Bank", card.getSource().getLabel());
+			assertEquals(CONTRAINDICATION_ALERT_TYPE, card.getAlertType());
+			assertNotEquals("interaction-rule", card.getUuid());
+		}
+
+		for (MedicationRequest medication : List.of(amiodarone, tablet, suspension, otherForm)) {
+			medication.setId("saved-" + medication.getId());
+			medication.getMedicationCodeableConcept().getCoding().forEach(coding -> coding.setDisplay("Renamed formulation"));
+			Collections.reverse(medication.getMedicationCodeableConcept().getCoding());
+			medication.getMedicationCodeableConcept().addCoding(new Coding("http://example.org/extra", "mapping", null));
+		}
+		assertEquals(pairIds(cards), pairIds(evaluateInteractions(otherForm, suspension, tablet, amiodarone)));
+	}
+
+	@Test
+	void shouldKeepOtherPairsWhenOneInteractionFormulationIsRemoved() throws Exception {
+		configureDrugInteractions(drugInteraction("interaction-rule", List.of("69236009"), List.of("96119002")));
+		MedicationRequest firstA = interactionMedication("a1", "69236009", "Amiodarone ampoule");
+		MedicationRequest secondA = interactionMedication("a2", "69236009", "Amiodarone tablet");
+		MedicationRequest firstB = interactionMedication("b1", "96119002", "Albendazole tablet");
+		MedicationRequest secondB = interactionMedication("b2", "96119002", "Albendazole suspension");
+		MedicationRequest duplicateOrder = firstB.copy();
+		duplicateOrder.setId("another-order-for-b1");
+
+		List<CDSCard> allPairs = evaluateInteractions(firstA, secondA, firstB, secondB, duplicateOrder);
+		assertEquals(4, allPairs.size());
+		assertEquals(4, allPairs.stream().map(CDSCard::getUuid).distinct().count());
+		Map<Set<String>, String> originalIds = pairIds(allPairs);
+
+		List<CDSCard> remaining = evaluateInteractions(firstA, secondA, secondB);
+		assertEquals(2, remaining.size());
+		assertEquals(Set.of(Set.of("a1", "b2"), Set.of("a2", "b2")), pairIds(remaining).keySet());
+		pairIds(remaining).forEach((pair, uuid) -> assertEquals(originalIds.get(pair), uuid));
+		assertEquals(1, evaluateInteractions(secondA, secondB).size());
+		assertEquals(0, evaluateInteractions(firstB, secondB).size());
+		assertEquals(0, evaluateInteractions(firstA, secondA).size());
+	}
+
+	@Test
+	void shouldEmitOverlappingInteractionPairOnceWithoutSelfInteractions() throws Exception {
+		CDSTrigger firstRule = drugInteraction("first-rule", List.of("96119002"), List.of("96119002"));
+		configureDrugInteractions(firstRule);
+		MedicationRequest tablet = interactionMedication("tablet", "96119002", "Albendazole tablet");
+		MedicationRequest suspension = interactionMedication("suspension", "96119002", "Albendazole suspension");
+
+		assertEquals(0, evaluateInteractions(tablet, tablet.copy()).size());
+		List<CDSCard> cards = evaluateInteractions(tablet, suspension);
+		assertEquals(1, cards.size());
+		assertEquals(Set.of("tablet", "suspension"), new HashSet<>(localDrugCodes(cards.get(0))));
+		assertEquals(cards.get(0).getUuid(), evaluateInteractions(suspension, tablet).get(0).getUuid());
+
+		configureDrugInteractions(firstRule, drugInteraction("second-rule", List.of("96119002"), List.of("96119002")));
+		List<CDSCard> separateRules = evaluateInteractions(tablet, suspension);
+		assertEquals(2, separateRules.size());
+		assertNotEquals(separateRules.get(0).getUuid(), separateRules.get(1).getUuid());
+	}
+
+	@Test
+	void shouldUseStableFallbackCodingsWhenOpenmrsDrugIdentityIsAbsent() throws Exception {
+		configureDrugInteractions(drugInteraction("interaction-rule", List.of("69236009"), List.of("96119002")));
+		MedicationRequest amiodarone = interactionMedication("amiodarone", "69236009", "Amiodarone");
+		MedicationRequest tablet = interactionMedication("tablet", "96119002", "Albendazole tablet");
+		MedicationRequest suspension = interactionMedication("suspension", "96119002", "Albendazole suspension");
+		for (MedicationRequest medication : List.of(amiodarone, tablet, suspension)) {
+			medication.getMedicationCodeableConcept().getCoding().get(1).setSystem("http://bahmni.org/cds");
+		}
+
+		Set<String> ids = evaluateInteractions(amiodarone, tablet, suspension).stream().map(CDSCard::getUuid).collect(Collectors.toSet());
+		assertEquals(2, ids.size());
+		for (MedicationRequest medication : List.of(amiodarone, tablet, suspension)) {
+			Collections.reverse(medication.getMedicationCodeableConcept().getCoding());
+			medication.getMedicationCodeableConcept().addCoding(medication.getMedicationCodeableConcept().getCodingFirstRep().copy());
+			medication.setId("different-order");
+		}
+		assertEquals(ids, evaluateInteractions(suspension, amiodarone, tablet).stream().map(CDSCard::getUuid).collect(Collectors.toSet()));
+
+		tablet.getMedicationCodeableConcept().getCoding().removeIf(coding -> !SNOMEDCT_SYSTEM.equals(coding.getSystem()));
+		suspension.getMedicationCodeableConcept().getCoding().removeIf(coding -> !SNOMEDCT_SYSTEM.equals(coding.getSystem()));
+		assertEquals(1, evaluateInteractions(amiodarone, tablet, suspension).size());
 	}
 
 	@Test
@@ -663,6 +771,52 @@ class MedicationOrderSelectCDSServiceTest {
 		assertThrows(ResponseStatusException.class, () ->service.call(cdsRequest) );
 	}
 
+
+	private CDSTrigger drugInteraction(String uuid, List<String> firstCodes, List<String> secondCodes) {
+		return new MedicationInterationCDSTrigger(
+				"Party A", firstCodes.stream().map(code -> new Coding(SNOMEDCT_SYSTEM, code, null)).toList(),
+				"Party B", secondCodes.stream().map(code -> new Coding(SNOMEDCT_SYSTEM, code, null)).toList(),
+				new CDSCard(uuid, "{{ActualMedication1}} with {{ActualMedication2}}.", "{{RuleMedication1}} with {{RuleMedication2}}.",
+						CDSIndicator.critical, new CDSSource("Drug Bank"), null, null, CONTRAINDICATION_ALERT_TYPE));
+	}
+
+	private void configureDrugInteractions(CDSTrigger... triggers) throws ServiceException {
+		when(medicationRuleLoaderService.loadTriggers()).thenReturn(List.of(triggers));
+		service.init();
+	}
+
+	private MedicationRequest interactionMedication(String uuid, String code, String display) {
+		MedicationRequest medication = new MedicationRequest();
+		medication.setId("draft-" + uuid);
+		medication.setMedication(new CodeableConcept()
+				.addCoding(new Coding(SNOMEDCT_SYSTEM, code, display))
+				.addCoding(new Coding("https://fhir.openmrs.org", uuid, display)));
+		medication.addExtension("https://bahmni.org/fhir/StructureDefinition/skip-dosage-check", new BooleanType(true));
+		return medication;
+	}
+
+	private List<CDSCard> evaluateInteractions(MedicationRequest... medications) {
+		var parser = FhirContext.forR4().newJsonParser();
+		Bundle bundle = new Bundle();
+		for (MedicationRequest medication : medications) {
+			bundle.addEntry().setResource(medication);
+		}
+		CDSRequest request = new CDSRequest();
+		request.setPrefetchStrings(Map.of(
+				"patient", "{\"resourceType\":\"Patient\",\"id\":\"test-patient\"}",
+				"conditions", "{\"resourceType\":\"Bundle\"}",
+				"draftMedicationRequests", parser.encodeResourceToString(bundle)));
+		return service.call(request);
+	}
+
+	private List<String> localDrugCodes(CDSCard card) {
+		return card.getReferenceMedications().stream().flatMap(reference -> reference.getCoding().stream())
+				.filter(coding -> "https://fhir.openmrs.org".equals(coding.getSystem())).map(CDSCoding::getCode).toList();
+	}
+
+	private Map<Set<String>, String> pairIds(List<CDSCard> cards) {
+		return cards.stream().collect(Collectors.toMap(card -> new HashSet<>(localDrugCodes(card)), CDSCard::getUuid));
+	}
 
     private ConceptParameters getConceptParamsForDoseUnitMg() {
         String response = "{\"resourceType\":\"Parameters\",\"parameter\":[{\"name\":\"code\",\"valueString\":\"258684004\"},{\"name\":\"display\",\"valueString\":\"mg\"},{\"name\":\"name\",\"valueString\":\"SNOMED CT release 2023-05-31\"},{\"name\":\"system\",\"valueString\":\"http://snomed.info/sct\"},{\"name\":\"version\",\"valueString\":\"http://snomed.info/sct/900000000000207008/version/20230531\"},{\"name\":\"inactive\",\"valueBoolean\":false},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"effectiveTime\"},{\"name\":\"valueString\",\"valueString\":\"20020131\"}]},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"moduleId\"},{\"name\":\"value\",\"valueCode\":\"900000000000207008\"}]},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"inactive\"},{\"name\":\"valueBoolean\",\"valueString\":\"false\"}]},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"sufficientlyDefined\"},{\"name\":\"valueBoolean\",\"valueString\":\"false\"}]},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"normalFormTerse\"},{\"name\":\"valueString\",\"valueString\":\"258681007\"}]},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"normalForm\"},{\"name\":\"valueString\",\"valueString\":\"258681007|International System of Units unit of mass (qualifier value)|\"}]},{\"extension\":[{\"url\":\"http://snomed.info/fhir/StructureDefinition/designation-use-context\",\"extension\":[{\"url\":\"context\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000509007\"}},{\"url\":\"role\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000548007\",\"display\":\"PREFERRED\"}},{\"url\":\"type\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000003001\",\"display\":\"Fully specified name\"}}]},{\"url\":\"http://snomed.info/fhir/StructureDefinition/designation-use-context\",\"extension\":[{\"url\":\"context\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000508004\"}},{\"url\":\"role\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000548007\",\"display\":\"PREFERRED\"}},{\"url\":\"type\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000003001\",\"display\":\"Fully specified name\"}}]}],\"name\":\"designation\",\"part\":[{\"name\":\"language\",\"valueCode\":\"en\"},{\"name\":\"use\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000003001\",\"display\":\"Fully specified name\"}},{\"name\":\"value\",\"valueString\":\"milligram (qualifier value)\"}]},{\"extension\":[{\"url\":\"http://snomed.info/fhir/StructureDefinition/designation-use-context\",\"extension\":[{\"url\":\"context\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000509007\"}},{\"url\":\"role\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000548007\",\"display\":\"PREFERRED\"}},{\"url\":\"type\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000013009\",\"display\":\"Synonym\"}}]},{\"url\":\"http://snomed.info/fhir/StructureDefinition/designation-use-context\",\"extension\":[{\"url\":\"context\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000508004\"}},{\"url\":\"role\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000548007\",\"display\":\"PREFERRED\"}},{\"url\":\"type\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000013009\",\"display\":\"Synonym\"}}]}],\"name\":\"designation\",\"part\":[{\"name\":\"language\",\"valueCode\":\"en\"},{\"name\":\"use\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000013009\",\"display\":\"Synonym\"}},{\"name\":\"value\",\"valueString\":\"mg\"}]},{\"extension\":[{\"url\":\"http://snomed.info/fhir/StructureDefinition/designation-use-context\",\"extension\":[{\"url\":\"context\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000509007\"}},{\"url\":\"role\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000549004\",\"display\":\"ACCEPTABLE\"}},{\"url\":\"type\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000013009\",\"display\":\"Synonym\"}}]},{\"url\":\"http://snomed.info/fhir/StructureDefinition/designation-use-context\",\"extension\":[{\"url\":\"context\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000508004\"}},{\"url\":\"role\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000549004\",\"display\":\"ACCEPTABLE\"}},{\"url\":\"type\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000013009\",\"display\":\"Synonym\"}}]}],\"name\":\"designation\",\"part\":[{\"name\":\"language\",\"valueCode\":\"en\"},{\"name\":\"use\",\"valueCoding\":{\"system\":\"http://snomed.info/sct\",\"code\":\"900000000000013009\",\"display\":\"Synonym\"}},{\"name\":\"value\",\"valueString\":\"milligram\"}]},{\"name\":\"property\",\"part\":[{\"name\":\"code\",\"valueString\":\"parent\"},{\"name\":\"value\",\"valueCode\":\"258681007\"}]}]}";
