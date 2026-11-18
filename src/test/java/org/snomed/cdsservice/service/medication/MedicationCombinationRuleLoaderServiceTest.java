@@ -8,7 +8,6 @@ import org.snomed.cdsservice.model.CDSIndicator;
 import org.snomed.cdsservice.model.CDSTrigger;
 import org.snomed.cdsservice.model.MedicationInterationCDSTrigger;
 import org.snomed.cdsservice.service.ServiceException;
-import org.snomed.cdsservice.service.medication.dose.SnomedMedicationDefinedDailyDoseService;
 import org.snomed.cdsservice.service.tsclient.FHIRTerminologyServerClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -30,9 +29,6 @@ class MedicationCombinationRuleLoaderServiceTest {
 
 	@MockBean
 	private FHIRTerminologyServerClient mockTsClient;
-
-	@MockBean
-	private SnomedMedicationDefinedDailyDoseService doseService;
 
 	@BeforeEach
 	void setUp() {

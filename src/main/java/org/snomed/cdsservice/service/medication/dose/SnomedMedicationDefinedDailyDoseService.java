@@ -28,31 +28,24 @@ import org.snomed.cdsservice.service.tsclient.ConceptParameters;
 import org.snomed.cdsservice.service.tsclient.FHIRTerminologyServerClient;
 import org.snomed.cdsservice.service.tsclient.SnomedConceptNormalForm;
 import org.snomed.cdsservice.util.Frequency;
-import org.snomed.cdsservice.util.SnomedValueSetUtil;
 import org.snomed.cdsservice.util.UnitConversion;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -91,10 +84,6 @@ public class SnomedMedicationDefinedDailyDoseService {
 
     @Value("${rules.medication-substance-daily-doses.tsv}")
     private String tsvPath;
-    @Value("${rules.medication-route-validation.tsv}")
-    private String routeValidationTsvPath;
-    @Value("${medication.dosage-checks-enabled:false}")
-    private boolean dosageChecksEnabled;
     @Value("${acceptable-daily-dose-threshold-factor}")
     private String acceptableDailyDoseThresholdFactor;
     @Value("${maximum-daily-dose-threshold-factor}")
@@ -106,17 +95,11 @@ public class SnomedMedicationDefinedDailyDoseService {
 
     private List<ManyToOneMapEntry> doseFormsManySnomedToOneAtcCodeMap;
     private final Map<String, List<SubstanceDefinedDailyDose>> substanceDDD = new HashMap<>();
-    private final Set<String> routeValidationMedicationCodes = new HashSet<>();
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
     @PostConstruct
     public void init() throws ServiceException {
         doseFormsManySnomedToOneAtcCodeMap = doseFormsLoaderService.loadDoseFormMap();
-        if (!dosageChecksEnabled) {
-            loadRouteValidationScope();
-            logger.info("DDD dosage comparisons are disabled; validating routes only for configured medications.");
-            return;
-        }
 
         logger.info("Loading SNOMED CT Substance Defined Daily Dose information");
         try (BufferedReader reader = new BufferedReader(new FileReader(tsvPath))) {
@@ -152,113 +135,6 @@ public class SnomedMedicationDefinedDailyDoseService {
     }
 
     public List<CDSCard> checkMedications(List<MedicationRequest> medicationRequests) {
-        if (dosageChecksEnabled) {
-            return checkMedicationDosages(medicationRequests);
-        }
-        List<MedicationRequest> scopedRequests = medicationRequests.stream()
-                .filter(request -> findScopedMedication(request).isPresent())
-                .collect(Collectors.toList());
-        return checkMedicationRoutes(scopedRequests);
-    }
-
-    private void loadRouteValidationScope() throws ServiceException {
-        routeValidationMedicationCodes.clear();
-        try (BufferedReader reader = Files.newBufferedReader(Path.of(routeValidationTsvPath), StandardCharsets.UTF_8)) {
-            if (!"Medication\tMedication SNOMED Code".equals(reader.readLine())) {
-                throw new ServiceException("Route validation file must have header: Medication\\tMedication SNOMED Code");
-            }
-            String line;
-            int row = 1;
-            while ((line = reader.readLine()) != null) {
-                row++;
-                String[] columns = line.split("\t", -1);
-                if (columns.length != 2 || columns[0].isBlank() || !columns[1].matches("[1-9][0-9]*")) {
-                    throw new ServiceException("Invalid route validation medication at row " + row);
-                }
-                Set<String> expandedCodes = tsClient.expandValueSet(
-                                SnomedValueSetUtil.getSNOMEDValueSetURI(columns[1])).stream()
-                        .filter(coding -> SNOMEDCT_SYSTEM.equals(coding.getSystem()) && coding.hasCode())
-                        .map(Coding::getCode).collect(Collectors.toSet());
-                if (expandedCodes.isEmpty()) {
-                    throw new ServiceException("No SNOMED products found for route validation medication " + columns[0]);
-                }
-                routeValidationMedicationCodes.add(columns[1]);
-                routeValidationMedicationCodes.addAll(expandedCodes);
-            }
-        } catch (java.io.IOException | RestClientException e) {
-            throw new ServiceException("Failed to load medication route validation scope", e);
-        }
-        logger.info("Route validation covers {} configured product/descendant codes.", routeValidationMedicationCodes.size());
-    }
-
-    private Optional<Coding> findScopedMedication(MedicationRequest request) {
-        return request.getMedicationCodeableConcept().getCoding().stream()
-                .filter(coding -> SNOMEDCT_SYSTEM.equals(coding.getSystem())
-                        && routeValidationMedicationCodes.contains(coding.getCode()))
-                .findFirst();
-    }
-
-    private Optional<ManyToOneMapEntry> findRoute(String manufacturedDoseForm) {
-        return doseFormsManySnomedToOneAtcCodeMap.stream()
-                .filter(entry -> entry.sourceCodes().contains(manufacturedDoseForm))
-                .reduce((first, last) -> last);
-    }
-
-    private List<CDSCard> checkMedicationRoutes(List<MedicationRequest> medicationRequests) {
-        List<CDSCard> cards = new ArrayList<>();
-        for (MedicationRequest request : medicationRequests) {
-            Coding medication = findScopedMedication(request).orElseThrow();
-            String label = StringUtils.defaultIfBlank(medication.getDisplay(), medication.getCode());
-            try {
-                ConceptParameters parameters = tsClient.lookup(SNOMEDCT_SYSTEM, medication.getCode());
-                String normalFormText = parameters == null ? null : parameters.getPropertyValue("normalFormTerse");
-                if (normalFormText == null || !normalFormText.contains(":")) {
-                    addRouteUnavailableCard(cards, request, medication, label,
-                            "A formulation-specific medication code with a manufactured dose form is required.");
-                    continue;
-                }
-                SnomedConceptNormalForm normalForm = parameters.getNormalForm();
-                String doseForm = normalForm.getAttributes().get(ATTRIBUTE_HAS_MANUFACTURED_DOSE_FORM);
-                Optional<ManyToOneMapEntry> route = doseForm == null ? Optional.empty() : findRoute(doseForm);
-                if (route.isEmpty()) {
-                    addRouteUnavailableCard(cards, request, medication, label,
-                            "The medication has no supported manufactured dose form / route mapping.");
-                    continue;
-                }
-                if (request.getDosageInstruction().size() > 1) {
-                    addRouteUnavailableCard(cards, request, medication, label,
-                            "Multiple dosage instructions require manual route review.");
-                    continue;
-                }
-                Dosage dosage = request.hasDosageInstruction() ? request.getDosageInstruction().get(0) : null;
-                ManyToOneMapEntry expected = route.get();
-                if (dosage == null || !expected.targetCode().equals(dosage.getRoute().getText())) {
-                    String expectedRoute = expected.targetCode()
-                            + (StringUtils.isBlank(expected.label()) ? "" : " (" + expected.label().trim() + ")");
-                    composeCdssCardForDosageMismatch(cards, label, request.getMedicationCodeableConcept().getCoding(),
-                            expectedRoute, false);
-                }
-            } catch (RestClientException | ResponseStatusException e) {
-                logger.warn("Unable to resolve route for configured medication {}", medication.getCode(), e);
-                addRouteUnavailableCard(cards, request, medication, label,
-                        "Terminology information is unavailable; the route has not been validated.");
-            }
-        }
-        return cards;
-    }
-
-    private void addRouteUnavailableCard(List<CDSCard> cards, MedicationRequest request, Coding medication,
-                                         String label, String reason) {
-        logger.warn("Route validation unavailable for medication {}: {}", medication.getCode(), reason);
-        String uuid = UUID.nameUUIDFromBytes((medication.getCode() + ":route-unavailable")
-                .getBytes(StandardCharsets.UTF_8)).toString();
-        cards.add(new CDSCard(uuid, "Unable to validate medication route", label + ": " + reason,
-                CDSIndicator.warning, new CDSSource("CURE route validation", null),
-                Collections.singletonList(new CDSReference(getCodings(request.getMedicationCodeableConcept().getCoding()))),
-                null, INVALID_DOSAGE_ALERT_TYPE));
-    }
-
-    private List<CDSCard> checkMedicationDosages(List<MedicationRequest> medicationRequests) {
         List<CDSCard> cards = new ArrayList<>();
         Map<String, AggregatedMedicationsBySubstance> aggregatedMedicationsBySubstanceMap = new HashMap<>();
         for (MedicationRequest medicationRequest : medicationRequests) {
@@ -301,14 +177,18 @@ public class SnomedMedicationDefinedDailyDoseService {
                     logger.info("SNOMED drug {} has no manufactured does form, skipping.", snomedMedicationCode);
                     continue;
                 }
-                Optional<ManyToOneMapEntry> route = findRoute(manufacturedDoseForm);
-                if (route.isEmpty()) {
+                String atcRouteOfAdministrationCode = null;
+                String routeOfAdministrationLabel = null;
+                for (ManyToOneMapEntry manyToOneMapEntry : doseFormsManySnomedToOneAtcCodeMap) {
+                    if (manyToOneMapEntry.sourceCodes().contains(manufacturedDoseForm)) {
+                        atcRouteOfAdministrationCode = manyToOneMapEntry.targetCode();
+                        routeOfAdministrationLabel = manyToOneMapEntry.label() != null ? manyToOneMapEntry.label() : atcRouteOfAdministrationCode;
+                    }
+                }
+                if (atcRouteOfAdministrationCode == null) {
                     logger.info("SNOMED dose form {} is not covered by the route of administration dynamic map, skipping", manufacturedDoseForm);
                     continue;
                 }
-                String atcRouteOfAdministrationCode = route.get().targetCode();
-                String routeOfAdministrationLabel = route.get().label() != null
-                        ? route.get().label() : atcRouteOfAdministrationCode;
                 if (!(dosage.getRoute() != null && atcRouteOfAdministrationCode.equals(dosage.getRoute().getText()))) {
                     String expectedUnit = atcRouteOfAdministrationCode + (routeOfAdministrationLabel.equals(atcRouteOfAdministrationCode) ? "" : " (" + routeOfAdministrationLabel.trim() + ")" );
                     logger.info("Expected route {} for medication {}", expectedUnit, snomedMedicationLabel);
