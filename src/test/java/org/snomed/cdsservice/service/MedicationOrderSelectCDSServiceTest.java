@@ -46,7 +46,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+        "medication.dosage-checks-enabled=true",
+        "rules.medication-substance-daily-doses.tsv=src/test/resources/test-rules/Legacy_Adult_DDD_Test.tsv"
+})
 class MedicationOrderSelectCDSServiceTest {
 
     public static final String SNOMEDCT_SYSTEM = "http://snomed.info/sct";

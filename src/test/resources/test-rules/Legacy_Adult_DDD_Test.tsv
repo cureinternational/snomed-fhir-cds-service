@@ -1,0 +1,8 @@
+atc_code	atc_name	snomed_code	snomed_label	ddd	uom	adm_r	note
+A02BA02	ranitidine	372755005	Ranitidine (substance)	0.3	g	O	NA
+A02BA02	ranitidine	372755005	Ranitidine (substance)	0.3	g	P	NA
+C09AA05	ramipril	386872004	Ramipril (substance)	2.5	mg	O	NA
+C10AA05	atorvastatin	373444002	Atorvastatin (substance)	20	mg	O	NA
+M04AB01	probenecid	387365004	Probenecid (substance)	1	g	O	NA
+M04AC01	colchicine	387413002	Colchicine (substance)	1	mg	O	NA
+M04AC01	colchicine	387413002	Colchicine (substance)	1	mg	P	NA
