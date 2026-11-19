@@ -171,7 +171,7 @@ public class MedicationOrderSelectCDSService extends CDSService {
 					CDSCoding cdsCoding = referenceCondition.getCoding().get(0);
 					Optional<Condition> optionalCondition = activeDiagnoses.stream().filter(condition -> {
 						List<Coding> codingList = condition.getCode().getCoding();
-						Optional<Coding> optionalCoding = codingList.stream().filter(coding -> coding.getCode().equals(cdsCoding.getCode()) && coding.getSystem().equals(cdsCoding.getSystem())).findFirst();
+						Optional<Coding> optionalCoding = codingList.stream().filter(coding -> Objects.equals(coding.getCode(), cdsCoding.getCode()) && Objects.equals(coding.getSystem(), cdsCoding.getSystem())).findFirst();
 						return optionalCoding.isPresent();
 					}).findFirst();
 					optionalCondition.ifPresent(getCDSReferenceConditionConsumer(referenceCondition));
